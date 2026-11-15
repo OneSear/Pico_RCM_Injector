@@ -37,6 +37,11 @@ uint32_t payload_store_length(void);
 // uses this to avoid injecting a half-written payload.
 bool payload_store_upload_active(void);
 
+// Diagnostics: format a human-readable status string (build id, detected flash
+// size, region offsets, stored-payload validity). Returns the number of bytes
+// written (snprintf semantics). Exposed on the drive as STATUS.TXT.
+int payload_store_format_status(char *buf, int cap);
+
 // --- Called from the MSC disk callbacks (core0) ---------------------------
 
 // Stream `len` bytes written at byte offset `data_off` within the FAT data
