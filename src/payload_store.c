@@ -15,18 +15,18 @@
 
 // --- Flash layout ----------------------------------------------------------
 //
-// The payload region sits at the very top of flash so it can never collide with
-// the firmware image, which the linker places from the bottom upward. With the
-// pico2 default of 4 MiB flash and a firmware well under 1 MiB, there is a large
-// gap below this region.
+// The payload region sits at the very top of flash so it cannot collide with
+// the firmware image, which the linker places from the bottom upward.
 //
-//   [ PAYLOAD_HDR_OFFSET  ] 1 x 4 KiB  -> payload header (magic/len/crc)
-//   [ PAYLOAD_DATA_OFFSET ] 1 MiB      -> payload data (FAT data region)
+//   [ header offset ] 1 x 4 KiB  -> payload header (magic/len/crc)
+//   [ data offset   ] 1 MiB      -> payload data (FAT data region)
+//
+// The flash size is detected at runtime (see detect_flash_size). The board's
+// real size matters: a Waveshare RP2350-USB-A/CM has 2 MiB, not the 4 MiB the
+// generic pico2 board assumes, so a compile-time PICO_FLASH_SIZE_BYTES would
+// place this region past the end of the chip.
 
-#define PAYLOAD_REGION_SIZE   (0x1000u + PAYLOAD_DATA_SIZE)            // 4 KiB + 1 MiB
-#define PAYLOAD_REGION_OFFSET (PICO_FLASH_SIZE_BYTES - PAYLOAD_REGION_SIZE)
-#define PAYLOAD_HDR_OFFSET    (PAYLOAD_REGION_OFFSET)                  // flash offset
-#define PAYLOAD_DATA_OFFSET   (PAYLOAD_REGION_OFFSET + 0x1000u)        // flash offset
+#define PAYLOAD_REGION_SIZE (0x1000u + PAYLOAD_DATA_SIZE)  // 4 KiB + 1 MiB
 
 #define PAYLOAD_MAGIC   0x504D4352u  // "RCMP"
 #define PAYLOAD_VERSION 1u
@@ -42,11 +42,13 @@ typedef struct {
     uint32_t crc32;     // CRC32 of the payload bytes
 } payload_hdr_t;
 
-// A memory-mapped (XIP) view of the stored header / data.
-#define HDR_XIP  ((const payload_hdr_t *)(XIP_BASE + PAYLOAD_HDR_OFFSET))
-#define DATA_XIP ((const uint8_t *)(XIP_BASE + PAYLOAD_DATA_OFFSET))
-
 // --- State -----------------------------------------------------------------
+
+// Detected flash geometry (set in payload_store_init).
+static uint32_t s_flash_size = 0;
+static uint32_t s_hdr_offset = 0;   // flash offset of the header
+static uint32_t s_data_offset = 0;  // flash offset of the data region
+static bool     s_ready = false;    // geometry valid and region fits
 
 static volatile bool     s_valid = false;
 static volatile uint32_t s_valid_off = 0;
@@ -64,6 +66,30 @@ static uint32_t s_pending_off = 0;
 static uint32_t s_pending_len = 0;
 
 static volatile uint32_t s_last_activity_ms = 0;
+
+// Memory-mapped (XIP) views of the stored header / data.
+static inline const payload_hdr_t *hdr_xip(void) {
+    return (const payload_hdr_t *)(uintptr_t)(XIP_BASE + s_hdr_offset);
+}
+static inline const uint8_t *data_xip(void) {
+    return (const uint8_t *)(uintptr_t)(XIP_BASE + s_data_offset);
+}
+
+// --- Flash size detection --------------------------------------------------
+
+// Read the JEDEC ID (RDID, 0x9F) and decode the capacity byte. flash_do_cmd is
+// RAM-resident and restores XIP on return, so this is safe to call at startup
+// (single core, before core1 launches).
+static uint32_t detect_flash_size(void) {
+    uint8_t tx[4] = { 0x9Fu, 0, 0, 0 };
+    uint8_t rx[4] = { 0 };
+    flash_do_cmd(tx, rx, 4);
+    uint8_t capacity = rx[3];  // log2(size in bytes) for standard SPI NOR
+    if (capacity >= 16 && capacity <= 28) {  // 64 KiB .. 256 MiB
+        return 1u << capacity;
+    }
+    return 2u * 1024u * 1024u;  // safe fallback: this board is 2 MiB
+}
 
 // --- CRC32 (poly 0xEDB88320) ----------------------------------------------
 
@@ -113,15 +139,35 @@ static bool flash_write(uint32_t offset, const uint8_t *data,
 // --- Public API ------------------------------------------------------------
 
 void payload_store_init(void) {
-    const payload_hdr_t *h = HDR_XIP;
+    s_flash_size = detect_flash_size();
+
+    if (s_flash_size < PAYLOAD_REGION_SIZE) {
+        printf("payload_store: flash too small (%lu bytes); store disabled\n",
+               (unsigned long)s_flash_size);
+        s_ready = false;
+        return;
+    }
+
+    uint32_t region_offset = s_flash_size - PAYLOAD_REGION_SIZE;
+    s_hdr_offset = region_offset;
+    s_data_offset = region_offset + 0x1000u;
+    s_ready = true;
+
+    printf("payload_store: flash=%lu KiB, region at 0x%08lx (data 0x%08lx)\n",
+           (unsigned long)(s_flash_size / 1024u),
+           (unsigned long)s_hdr_offset, (unsigned long)s_data_offset);
+
+    const payload_hdr_t *h = hdr_xip();
     if (h->magic == PAYLOAD_MAGIC && h->version >= 1 &&
         h->length > 0 && h->length <= PAYLOAD_DATA_SIZE &&
         (uint64_t)h->data_off + h->length <= PAYLOAD_DATA_SIZE) {
-        uint32_t crc = crc32_update(0, DATA_XIP + h->data_off, h->length);
+        uint32_t crc = crc32_update(0, data_xip() + h->data_off, h->length);
         if (crc == h->crc32) {
             s_valid = true;
             s_valid_off = h->data_off;
             s_valid_len = h->length;
+        } else {
+            printf("payload_store: stored header CRC mismatch; ignoring\n");
         }
     }
     s_committed = true;
@@ -130,7 +176,7 @@ void payload_store_init(void) {
 
 bool payload_store_valid(void) { return s_valid; }
 
-const uint8_t *payload_store_data(void) { return DATA_XIP + s_valid_off; }
+const uint8_t *payload_store_data(void) { return data_xip() + s_valid_off; }
 
 uint32_t payload_store_length(void) { return s_valid_len; }
 
@@ -139,17 +185,17 @@ bool payload_store_upload_active(void) {
 }
 
 void payload_store_flush(void) {
-    if (s_page_idx < 0 || !s_page_dirty) {
+    if (!s_ready || s_page_idx < 0 || !s_page_dirty) {
         return;
     }
-    uint32_t offset = PAYLOAD_DATA_OFFSET + (uint32_t)s_page_idx * FLASH_SECTOR_SIZE;
+    uint32_t offset = s_data_offset + (uint32_t)s_page_idx * FLASH_SECTOR_SIZE;
     if (flash_write(offset, s_page, FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE)) {
         s_page_dirty = false;
     }
 }
 
 void payload_store_write(uint32_t data_off, const uint8_t *buf, uint32_t len) {
-    if (len == 0 || (uint64_t)data_off + len > PAYLOAD_DATA_SIZE) {
+    if (!s_ready || len == 0 || (uint64_t)data_off + len > PAYLOAD_DATA_SIZE) {
         return;  // outside the payload data region: ignore
     }
     int32_t page = (int32_t)(data_off / FLASH_SECTOR_SIZE);
@@ -157,7 +203,7 @@ void payload_store_write(uint32_t data_off, const uint8_t *buf, uint32_t len) {
         payload_store_flush();
         // Seed the cache from current flash contents so sectors we do not
         // touch in this page survive the erase/program.
-        memcpy(s_page, DATA_XIP + (uint32_t)page * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
+        memcpy(s_page, data_xip() + (uint32_t)page * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
         s_page_idx = page;
         s_page_dirty = false;
     }
@@ -168,7 +214,7 @@ void payload_store_write(uint32_t data_off, const uint8_t *buf, uint32_t len) {
 }
 
 void payload_store_read(uint32_t data_off, uint8_t *buf, uint32_t len) {
-    if ((uint64_t)data_off + len > PAYLOAD_DATA_SIZE) {
+    if (!s_ready || (uint64_t)data_off + len > PAYLOAD_DATA_SIZE) {
         memset(buf, 0, len);
         return;
     }
@@ -176,12 +222,12 @@ void payload_store_read(uint32_t data_off, uint8_t *buf, uint32_t len) {
     if (page == s_page_idx && s_page_dirty) {
         memcpy(buf, s_page + (data_off % FLASH_SECTOR_SIZE), len);
     } else {
-        memcpy(buf, DATA_XIP + data_off, len);
+        memcpy(buf, data_xip() + data_off, len);
     }
 }
 
 void payload_store_note_entry(uint32_t data_off, uint32_t length) {
-    if (length == 0 || length > PAYLOAD_DATA_SIZE ||
+    if (!s_ready || length == 0 || length > PAYLOAD_DATA_SIZE ||
         (uint64_t)data_off + length > PAYLOAD_DATA_SIZE) {
         return;
     }
@@ -194,10 +240,10 @@ void payload_store_note_entry(uint32_t data_off, uint32_t length) {
 
 static void commit_now(void) {
     payload_store_flush();
-    if (!s_have_pending || s_committed) {
+    if (!s_ready || !s_have_pending || s_committed) {
         return;
     }
-    uint32_t crc = crc32_update(0, DATA_XIP + s_pending_off, s_pending_len);
+    uint32_t crc = crc32_update(0, data_xip() + s_pending_off, s_pending_len);
 
     // Build a one-page header image and program it.
     static uint8_t hdr_buf[FLASH_PAGE_SIZE];
@@ -209,7 +255,7 @@ static void commit_now(void) {
     h->length = s_pending_len;
     h->crc32 = crc;
 
-    if (flash_write(PAYLOAD_HDR_OFFSET, hdr_buf, FLASH_SECTOR_SIZE, FLASH_PAGE_SIZE)) {
+    if (flash_write(s_hdr_offset, hdr_buf, FLASH_SECTOR_SIZE, FLASH_PAGE_SIZE)) {
         s_valid = true;
         s_valid_off = s_pending_off;
         s_valid_len = s_pending_len;
