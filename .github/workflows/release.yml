@@ -1,0 +1,72 @@
+name: Release firmware
+
+# Build the UF2 and attach it to the release.
+#
+# Triggers on "published" because that is the point where the release exists and
+# is public, so the asset upload is reliable. If you'd rather build when a
+# release is first created (including drafts), change this to [created].
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write  # needed to upload the asset to the release
+
+jobs:
+  build:
+    name: Build and attach UF2
+    runs-on: ubuntu-latest
+
+    # Versions pinned to match a known-good local build.
+    env:
+      PICO_SDK_REF: "2.3.0"
+      PICO_PIO_USB_REF: "5a37a66dc5d3fbe0ef3cdbeda923a757440f984f"
+      ARM_TOOLCHAIN_RELEASE: "14.2.Rel1"
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Checkout Pico SDK
+        uses: actions/checkout@v4
+        with:
+          repository: raspberrypi/pico-sdk
+          ref: ${{ env.PICO_SDK_REF }}
+          path: pico-sdk
+          submodules: false
+
+      - name: Fetch TinyUSB (SDK submodule)
+        run: git -C pico-sdk submodule update --init --depth 1 lib/tinyusb
+
+      - name: Checkout Pico-PIO-USB
+        uses: actions/checkout@v4
+        with:
+          repository: sekigon-gonnoc/Pico-PIO-USB
+          ref: ${{ env.PICO_PIO_USB_REF }}
+          path: Pico-PIO-USB
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install Arm GNU toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: ${{ env.ARM_TOOLCHAIN_RELEASE }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DPICO_BOARD=pico2
+          -DPICO_SDK_PATH=${{ github.workspace }}/pico-sdk
+          -DPICO_PIO_USB_PATH=${{ github.workspace }}/Pico-PIO-USB
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Attach UF2 to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cp build/pico_rcm_injector.uf2 "pico_rcm_injector-${TAG}.uf2"
+          gh release upload "${TAG}" "pico_rcm_injector-${TAG}.uf2" --clobber
