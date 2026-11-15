@@ -1,85 +1,128 @@
 # Pico RCM Injector
 
-This is a Raspberry Pi Pico / RP2040 firmware scaffold for using the Pico as a USB host that detects APX/RCM device and sends an embedded RCM payload.
+Turn a Waveshare RP2350-USB-CM board into an RCM payload injector for the Nintendo Switch.
 
-It is modeled after the shape of `fusee-alpestre`, but not the implementation. `fusee-alpestre` builds a Raspberry Pi Linux image and runs a launcher from Linux; this project is bare-metal Pico SDK firmware using TinyUSB host mode.
+The board acts as a USB host. It waits for a Switch in RCM mode, then sends the payload. You can build the payload into the firmware. Or you can just drag a `payload.bin` onto the board, like a USB stick.
 
-## Disclaimer
-I will not be responsible for fried Raspberries and Switches. Use at own risk.
+## How it works
 
-## Lawful Use Only
+The board uses two USB ports:
 
-This project is provided only for lawful homebrew, recovery, repair, research, and interoperability work on hardware you personally own or are explicitly authorized to service.
+- **Host port** connects to the Switch. The board sends the payload here.
+- **Flashing port** (the native USB) does the rest. You flash the board, drop a payload, and power it here.
 
-Do not use this project to pirate games, bypass payment, defeat online service rules, run unauthorized copies of copyrighted works, distribute console keys, distribute copyrighted firmware, or help anyone else do those things.
+A WS2812 RGB LED shows the status with colors.
 
-You are responsible for understanding and following the laws, licenses, warranty terms, and platform rules that apply where you live. This repository does not grant permission to circumvent copyright protection systems or use third-party copyrighted material without authorization.
+## Set the payload
 
-If you are unsure whether your intended use is lawful, do not use this project until you have checked the applicable rules or obtained proper legal advice.
+You have two options.
 
-This repository includes a generated Hekate payload header. See `NOTICE.md` and `third_party/` for source, attribution, and license details.
+### Option 1: Drag and drop (easiest)
 
-## Instructions
+1. Plug the board into your computer with the flashing port.
+2. A drive called `RCM Payload Drive` shows up.
+3. Copy your `payload.bin` onto it.
+4. The board saves it to flash. It stays there after you unplug.
 
-1. Flash latest .uf2 to pico from releases
-2. Power pico with 3-5v through VSYS and Ground. Pico led should slow blink while waiting for device.
-3. Put device in RCM mode and connect powered pico through usb-c. Pico led should be solid green while injecting payload.
-4. Afer Payload Delivery disconnect pico
+A dropped payload replaces the built-in one. The max size is 1 MiB.
 
-## Hardware Notes
+### Option 2: Build it in
 
-3-D Printable Case https://www.printables.com/model/1762449-pico-case-for-re-chargeable-battery-and-onoff-tac/files
+The firmware ships with a hekate payload baked in. The board uses it if you haven't dropped a file. See [Build](#build) to change it.
 
-The Pico must act as the USB host and provide VBUS to the Switch-side USB connection. A normal Pico plugged into a PC over micro-USB is a USB device, not a host.
+## Use it
 
-Minimum wiring for a standalone injector:
+1. Flash the latest `.uf2` (see [Build](#build), or get it from Releases).
+2. Set your payload (see above).
+3. Put the Switch in RCM mode.
+4. Connect the Switch to the board's host port.
+5. The board sends the payload. The LED turns green when it is done.
+6. Unplug the Switch.
 
-- Pico USB `D+` and `D-` to the Switch USB-C cable/device connector data pair.
-- Stable 5 V to the target connector VSYS through a current-limited source.
-- Common ground between Pico, 3-5 V supply, and USB connector.
-- Pico powered from `VSYS` or `VBUS`, depending on your power design.
+Keep the board powered the whole time. Power it through the flashing port.
 
-Do not connect two powered USB hosts together. Use a known-good USB-C data cable and a current-limited 5 V source.
+## LED status
+
+- **Blue, slow blink:** waiting for a Switch.
+- **Amber, solid:** sending the payload.
+- **Green, solid:** done.
+- **Red, solid:** the USB host failed to start.
+- **Red, blinking:** an error happened. Count the blinks:
+  - 1: no payload.
+  - 2: could not open the Switch's USB endpoints.
+  - 3: reserved (the firmware skips this check).
+  - 4: the payload failed to send.
+  - 5: the final trigger failed.
+
+The board also prints logs over UART. USB logging is off because the host port is busy.
 
 ## Build
 
-Install the Raspberry Pi Pico SDK and ARM GCC toolchain, then set `PICO_SDK_PATH`.
+Install the Raspberry Pi Pico SDK and the Arm GNU toolchain (the one with newlib). Set `PICO_SDK_PATH` to your SDK folder.
+
+On macOS or Linux:
+
+```bash
+./build.sh
+```
+
+On Windows:
 
 ```powershell
-python tools/bin2payload_h.py C:\path\to\payload.bin include\payload.h
 .\build.ps1
 ```
 
-`include/payload.h` is generated from the embedded payload. Use `include/payload.example.h` as the placeholder/reference format if you want to replace it.
+The build makes `build/pico_rcm_injector.uf2`.
 
-Flash `build/pico_rcm_injector.uf2` by holding `BOOTSEL` while plugging the Pico into your PC, then copying the UF2 to the `RPI-RP2` drive.
+To flash it, hold `BOOTSEL`, plug the board into your PC, and copy the `.uf2` to the `RP2350` drive. The build makes the UF2 on its own, so you do not need `picotool`.
 
-This project generates the UF2 locally with `tools/bin2uf2.py`, so it does not require Pico SDK's optional `picotool` helper.
+### Change the built-in payload
 
-## Runtime Behavior
+Turn your `.bin` into a C header, then build again:
 
-- Slow blink: waiting for an APX/RCM USB device.
-- One long blink after attach: payload sequence completed.
-- Repeating short blink count: error code.
+```bash
+python tools/bin2payload_h.py path/to/payload.bin include/payload.h
+./build.sh
+```
 
-Error blink codes:
+`include/payload.example.h` shows the header format.
 
-- 1 blink: no payload embedded.
-- 2 blinks: APX endpoints could not be opened.
-- 3 blinks: reserved for device ID read failure; current builds continue past this check.
-- 4 blinks: payload bulk write failed.
-- 5 blinks: final trigger/control transfer failed.
+## Hardware
 
-UART logging is enabled because USB stdio is disabled while the RP2040 USB peripheral is in host mode.
+- You need a USB-C cable to connect the Switch to the host port.
+- The board powers the Switch side, so give it a stable 5 V supply.
+- Do not connect two powered USB hosts together.
+- Use a known-good cable.
 
-## Project Layout
+There is a 3D-printable case here: https://www.printables.com/model/1762449-pico-case-for-re-chargeable-battery-and-onoff-tac/files
 
-- `src/main.c`: TinyUSB host loop, APX detection, LED status.
-- `src/rcm_injector.c`: endpoint setup, transfer buffering, launch sequence.
-- `include/payload.h`: generated payload array, initially a placeholder.
-- `tools/bin2payload_h.py`: converts a `.bin` payload into a C header.
+## Disclaimer
 
-## Sources And Prior Art
+Use at your own risk. I am not responsible for any damage to your board or your Switch.
+
+## Lawful use only
+
+Use this project only for lawful work. That means homebrew, recovery, repair, research, and interoperability. Use it only on hardware you own or are allowed to service.
+
+Do not use it to pirate games or other copyrighted works. Do not use it to bypass payment or break online service rules. Do not share console keys or copyrighted firmware. Do not help anyone else do these things.
+
+You must follow the laws, licenses, and platform rules where you live. This project does not give you permission to break copyright protection.
+
+If you are not sure your use is legal, do not use it yet. Check the rules first, or get legal advice.
+
+This project includes a generated hekate payload. See `NOTICE.md` and `third_party/` for the source, credits, and license.
+
+## Project layout
+
+- `src/main.c`: USB host loop, Switch detection, LED, and drag-and-drop setup.
+- `src/rcm_injector.c`: the RCM injection sequence.
+- `src/msc_disk.c`: the fake USB drive that catches a dropped file.
+- `src/payload_store.c`: saves a dropped payload to flash.
+- `include/payload.h`: the built-in payload (generated).
+- `tools/bin2payload_h.py`: turns a `.bin` into a C header.
+- `tools/bin2uf2.py`: turns a `.bin` into a UF2 file.
+
+## Sources and prior art
 
 - [kleo/fusee-alpestre](https://github.com/kleo/fusee-alpestre)
 - [blockfeed/sam-fusee-launcher-internal](https://github.com/blockfeed/sam-fusee-launcher-internal)
@@ -88,4 +131,4 @@ UART logging is enabled because USB stdio is disabled while the RP2040 USB perip
 
 ## License
 
-GPL-3.0-only. The launch sequence is derived from GPL microcontroller implementations of the public Fusee launcher flow.
+GPL-3.0-only. The launch sequence comes from GPL microcontroller versions of the public Fusee launcher flow.
