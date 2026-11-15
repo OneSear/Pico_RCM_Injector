@@ -11,6 +11,7 @@
 #include <stdio.h>
 
 #include "hardware/clocks.h"
+#include "pico/flash.h"
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 
@@ -19,6 +20,7 @@
 #include "tusb.h"
 
 #include "payload.h"
+#include "payload_store.h"
 #include "rcm_injector.h"
 #include "status_led.h"
 
@@ -129,6 +131,10 @@ void tuh_umount_cb(uint8_t dev_addr) {
 }
 
 static void core1_main(void) {
+    // Allow core0 to lock this core out while it erases/programs flash to store
+    // a dropped payload. Must be done before any flash_safe_execute() on core0.
+    flash_safe_execute_core_init();
+
     // Hand the PIO-USB stack this board's pinout before bringing it up.
     pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
     pio_cfg.pin_dp = PIO_USB_DP_PIN;
@@ -144,12 +150,21 @@ static void core1_main(void) {
     while (true) {
         tuh_task();
 
-        if (app_state == APP_WAITING && apx_ready) {
+        // Hold off while a drag-and-drop payload is still being written to flash.
+        if (app_state == APP_WAITING && apx_ready && !payload_store_upload_active()) {
             app_state = APP_INJECTING;
             sleep_ms(100);
 
+            // A stored (dropped) payload overrides the compiled-in default.
+            const uint8_t *payload = rcm_payload;
+            uint32_t payload_len = rcm_payload_len;
+            if (payload_store_valid()) {
+                payload = payload_store_data();
+                payload_len = payload_store_length();
+            }
+
             rcm_inject_result_t result =
-                rcm_inject_payload(apx_dev_addr, rcm_payload, rcm_payload_len);
+                rcm_inject_payload(apx_dev_addr, payload, payload_len);
             printf("Injection result: %s\n", rcm_inject_result_name(result));
 
             if (result == RCM_INJECT_OK) {
@@ -167,17 +182,30 @@ int main(void) {
     // Do this before anything else so both cores run at the right frequency.
     set_sys_clock_khz(120000, true);
 
-    stdio_init_all();  // UART; native-USB stdio is unavailable in host mode
+    stdio_init_all();  // UART; native USB is claimed by the MSC device below
     status_led_init();
 
+    // Latch any payload previously dropped onto the drive and stored in flash.
+    payload_store_init();
+
+    // Bring up the USB *device* (MSC drive) on the native port (roothub 0).
+    tud_init(BOARD_TUD_RHPORT);
+
     printf("Pico RCM injector (RP2350-USB-CM) starting\n");
-    printf("Payload size: %lu bytes\n", (unsigned long)rcm_payload_len);
+    if (payload_store_valid()) {
+        printf("Payload source: dropped file, %lu bytes\n",
+               (unsigned long)payload_store_length());
+    } else {
+        printf("Payload source: compiled-in default, %lu bytes\n",
+               (unsigned long)rcm_payload_len);
+    }
 
     multicore_reset_core1();
     multicore_launch_core1(core1_main);
 
     while (true) {
-        status_task();
-        sleep_ms(1);
+        tud_task();             // service the MSC drive
+        payload_store_task();   // commit a dropped payload once writes go quiet
+        status_task();          // self-throttled via board_millis()
     }
 }
