@@ -8,9 +8,9 @@ This repository includes code and payload data derived from third-party open sou
 
 - Upstream project: `CTCaer/hekate`
 - Source repository: https://github.com/CTCaer/hekate
-- Release used: `hekate v6.5.2 & Nyx v1.9.2`
-- Release page: https://github.com/CTCaer/hekate/releases/tag/v6.5.2
-- Binary embedded locally: `hekate_ctcaer_6.5.2.bin`
+- Release used: `hekate v6.5.5 & Nyx v1.9.5`
+- Release page: https://github.com/CTCaer/hekate/releases/tag/v6.5.5
+- Binary embedded locally: `hekate_ctcaer_6.5.5.bin`
 - License text: `third_party/hekate/LICENSE`
 
 The generated header is included for convenience so this project builds into a ready-to-flash injector. If you want to use a different payload, regenerate it with:
