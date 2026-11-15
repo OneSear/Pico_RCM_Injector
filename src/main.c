@@ -1,12 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-only
+//
+// RCM payload injector for the Waveshare RP2350-USB-CM.
+//
+// On this board the Type-C plug that mates with the target (the Switch) is wired
+// to the RP2350's PIO-USB port (D+ = GPIO13, D- = GPIO12), not the native USB
+// peripheral -- the native receptacle is used only for flashing. The PIO-USB
+// host therefore runs on core1 (roothub port 1) while core0 drives the WS2812
+// status LED on GPIO16.
 
 #include <stdio.h>
 
-#include "bsp/board_api.h"
-#include "payload.h"
+#include "hardware/clocks.h"
+#include "pico/multicore.h"
 #include "pico/stdlib.h"
-#include "rcm_injector.h"
+
+#include "bsp/board_api.h"
+#include "pio_usb.h"
 #include "tusb.h"
+
+#include "payload.h"
+#include "rcm_injector.h"
+#include "status_led.h"
+
+// --- Board wiring (Waveshare RP2350-USB-CM) ---
+#define PIO_USB_DP_PIN 13  // D- is GPIO12 via the DMDP pinout (DM = DP - 1)
 
 typedef enum {
     APP_WAITING = 0,
@@ -15,23 +32,17 @@ typedef enum {
     APP_ERROR,
 } app_state_t;
 
-static volatile uint8_t apx_dev_addr = 0;
+// Shared between core0 (LED) and core1 (USB). Single writer (core1) for state.
+static volatile app_state_t app_state = APP_WAITING;
+static volatile uint8_t error_blink_count = 0;
+
+// Owned by core1 only.
+static uint8_t apx_dev_addr = 0;
 static volatile bool apx_ready = false;
-static app_state_t app_state = APP_WAITING;
-static uint8_t error_blink_count = 0;
 
-static void set_led(bool on) {
-    board_led_write(on);
-}
-
-static void blink(unsigned count, unsigned on_ms, unsigned off_ms) {
-    for (unsigned i = 0; i < count; i++) {
-        set_led(true);
-        sleep_ms(on_ms);
-        set_led(false);
-        sleep_ms(off_ms);
-    }
-}
+// ---------------------------------------------------------------------------
+// core0: WS2812 status indicator
+// ---------------------------------------------------------------------------
 
 static void status_task(void) {
     static uint32_t last_ms = 0;
@@ -39,29 +50,46 @@ static void status_task(void) {
     static bool led = false;
     static uint8_t pulses_done = 0;
     const uint32_t now = board_millis();
+    const app_state_t state = app_state;
 
-    if (app_state == APP_WAITING) {
-        if (now - last_ms < 500) {
+    switch (state) {
+        case APP_WAITING:
+            // Slow blue blink while waiting for the target.
+            if (now - last_ms >= 500) {
+                last_ms = now;
+                led = !led;
+                status_led_set(0, 0, led ? 40 : 0);
+            }
+            pulses_done = 0;
+            pause_start_ms = 0;
             return;
-        }
 
-        last_ms = now;
-        led = !led;
-        set_led(led);
+        case APP_INJECTING:
+            status_led_set(40, 25, 0);  // solid amber
+            pulses_done = 0;
+            pause_start_ms = 0;
+            return;
+
+        case APP_DONE:
+            status_led_set(0, 60, 0);  // solid green
+            return;
+
+        case APP_ERROR:
+            break;
+    }
+
+    // APP_ERROR: blink red error_blink_count times, then pause.
+    const uint8_t count = error_blink_count;
+    if (count == 0) {
+        status_led_set(60, 0, 0);
         return;
     }
 
-    if (app_state != APP_ERROR || error_blink_count == 0) {
-        return;
-    }
-
-    if (pulses_done >= error_blink_count) {
-        set_led(false);
-
+    if (pulses_done >= count) {
+        status_led_set(0, 0, 0);
         if (pause_start_ms == 0) {
             pause_start_ms = now;
         }
-
         if (now - pause_start_ms >= 1000) {
             pause_start_ms = 0;
             pulses_done = 0;
@@ -70,16 +98,19 @@ static void status_task(void) {
         return;
     }
 
-    if (now - last_ms >= 120) {
+    if (now - last_ms >= 160) {
         last_ms = now;
         led = !led;
-        set_led(led);
-
+        status_led_set(led ? 60 : 0, 0, 0);
         if (!led) {
             pulses_done++;
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// core1: PIO-USB host + injection
+// ---------------------------------------------------------------------------
 
 void tuh_mount_cb(uint8_t dev_addr) {
     if (rcm_is_apx_device(dev_addr)) {
@@ -92,50 +123,61 @@ void tuh_umount_cb(uint8_t dev_addr) {
     if (apx_dev_addr == dev_addr) {
         apx_dev_addr = 0;
         apx_ready = false;
-        app_state = APP_WAITING;
         error_blink_count = 0;
+        app_state = APP_WAITING;
     }
 }
 
-int main(void) {
-    stdio_init_all();
-    board_init();
-
-    printf("Pico RCM injector starting\n");
-    printf("Payload size: %lu bytes\n", (unsigned long)rcm_payload_len);
+static void core1_main(void) {
+    // Hand the PIO-USB stack this board's pinout before bringing it up.
+    pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
+    pio_cfg.pin_dp = PIO_USB_DP_PIN;
+    pio_cfg.pinout = PIO_USB_PINOUT_DMDP;  // D- = D+ minus 1 (GPIO12)
+    tuh_configure(BOARD_TUH_RHPORT, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
 
     if (!tuh_init(BOARD_TUH_RHPORT)) {
-        printf("TinyUSB host init failed\n");
+        error_blink_count = 0;
         app_state = APP_ERROR;
+        return;
     }
-
-    if (board_init_after_tusb) {
-        board_init_after_tusb();
-    }
-
-    blink(2, 75, 75);
 
     while (true) {
         tuh_task();
-        status_task();
 
         if (app_state == APP_WAITING && apx_ready) {
             app_state = APP_INJECTING;
-            set_led(true);
             sleep_ms(100);
 
-            rcm_inject_result_t result = rcm_inject_payload(apx_dev_addr, rcm_payload, rcm_payload_len);
+            rcm_inject_result_t result =
+                rcm_inject_payload(apx_dev_addr, rcm_payload, rcm_payload_len);
             printf("Injection result: %s\n", rcm_inject_result_name(result));
 
             if (result == RCM_INJECT_OK) {
                 app_state = APP_DONE;
-                blink(1, 250, 100);
             } else {
-                app_state = APP_ERROR;
                 error_blink_count = (uint8_t)result;
+                app_state = APP_ERROR;
             }
-
-            set_led(false);
         }
+    }
+}
+
+int main(void) {
+    // PIO-USB bit-banging needs a system clock that is a multiple of 12 MHz.
+    // Do this before anything else so both cores run at the right frequency.
+    set_sys_clock_khz(120000, true);
+
+    stdio_init_all();  // UART; native-USB stdio is unavailable in host mode
+    status_led_init();
+
+    printf("Pico RCM injector (RP2350-USB-CM) starting\n");
+    printf("Payload size: %lu bytes\n", (unsigned long)rcm_payload_len);
+
+    multicore_reset_core1();
+    multicore_launch_core1(core1_main);
+
+    while (true) {
+        status_task();
+        sleep_ms(1);
     }
 }
