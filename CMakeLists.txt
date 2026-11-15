@@ -33,6 +33,10 @@ add_executable(pico_rcm_injector
     src/main.c
     src/rcm_injector.c
     src/status_led.c
+    # USB device side: MSC drag-and-drop payload drive on the native USB port.
+    src/usb_descriptors.c
+    src/msc_disk.c
+    src/payload_store.c
     # TinyUSB's PIO-USB host controller driver shim (kept in the SDK tree).
     ${PICO_TINYUSB_PATH}/src/portable/raspberrypi/pio_usb/hcd_pio_usb.c
 )
@@ -54,8 +58,12 @@ target_compile_definitions(pico_rcm_injector PRIVATE
 target_link_libraries(pico_rcm_injector
     pico_stdlib
     pico_multicore
+    pico_unique_id
     hardware_pio
     hardware_dma
+    hardware_flash
+    pico_flash
+    tinyusb_device
     tinyusb_host
     tinyusb_board
     pico_pio_usb
