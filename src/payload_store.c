@@ -31,6 +31,9 @@
 #define PAYLOAD_MAGIC   0x504D4352u  // "RCMP"
 #define PAYLOAD_VERSION 1u
 
+// Bump on each firmware build so STATUS.TXT confirms which image is running.
+#define PAYLOAD_BUILD_ID "2026-11-15a"
+
 #define COMMIT_IDLE_MS  750u   // commit once writes have been quiet this long
 #define FLASH_OP_TIMEOUT_MS 3000u
 
@@ -179,6 +182,22 @@ bool payload_store_valid(void) { return s_valid; }
 const uint8_t *payload_store_data(void) { return data_xip() + s_valid_off; }
 
 uint32_t payload_store_length(void) { return s_valid_len; }
+
+int payload_store_format_status(char *buf, int cap) {
+    return snprintf(buf, (size_t)cap,
+        "Pico RCM Injector\r\n"
+        "build: " PAYLOAD_BUILD_ID "\r\n"
+        "flash: %lu KiB\r\n"
+        "region: hdr=0x%08lx data=0x%08lx\r\n"
+        "stored payload: %s\r\n"
+        "length: %lu bytes\r\n"
+        "upload active: %s\r\n",
+        (unsigned long)(s_flash_size / 1024u),
+        (unsigned long)s_hdr_offset, (unsigned long)s_data_offset,
+        s_valid ? "VALID" : "none",
+        (unsigned long)s_valid_len,
+        payload_store_upload_active() ? "yes" : "no");
+}
 
 bool payload_store_upload_active(void) {
     return s_page_dirty || (s_have_pending && !s_committed);

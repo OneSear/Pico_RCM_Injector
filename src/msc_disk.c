@@ -36,6 +36,12 @@
 #define DATA_LBA      (ROOT_LBA + ROOT_SECS)              // 4
 #define TOTAL_SECS    (DATA_LBA + DATA_SECS)              // 2052
 
+// A read-only STATUS.TXT diagnostic file is pinned to cluster 2 (the first data
+// cluster). Host-written payloads therefore start at cluster 3. The file content
+// is generated on read, so it always reflects the firmware's current state.
+#define STATUS_CLUSTER 2u
+#define STATUS_SIZE    512u
+
 // In-RAM metadata (small). The data region is backed by flash, not RAM.
 static uint8_t s_fat[SECTOR_SIZE];
 static uint8_t s_root[SECTOR_SIZE];
@@ -69,16 +75,45 @@ static void build_boot_sector(uint8_t sector[SECTOR_SIZE]) {
     sector[510] = 0x55; sector[511] = 0xAA;                 // boot signature
 }
 
+static void put_dir_entry(uint8_t *e, const char name[11], uint8_t attr,
+                          uint16_t cluster, uint32_t size) {
+    memset(e, 0, 32);
+    memcpy(e, name, 11);
+    e[11] = attr;
+    e[26] = (uint8_t)(cluster & 0xFF);
+    e[27] = (uint8_t)(cluster >> 8);
+    e[28] = (uint8_t)(size & 0xFF);
+    e[29] = (uint8_t)((size >> 8) & 0xFF);
+    e[30] = (uint8_t)((size >> 16) & 0xFF);
+    e[31] = (uint8_t)((size >> 24) & 0xFF);
+}
+
 static void disk_init(void) {
     if (s_inited) {
         return;
     }
-    // Empty FAT: clusters 0 and 1 reserved (media byte + EOC markers).
+    // FAT: clusters 0 and 1 reserved; cluster 2 marked EOC (0xFFF) because it is
+    // allocated to the pinned STATUS.TXT file.
     memset(s_fat, 0, sizeof(s_fat));
-    s_fat[0] = 0xF8; s_fat[1] = 0xFF; s_fat[2] = 0xFF;
-    // Empty root directory.
+    s_fat[0] = 0xF8; s_fat[1] = 0xFF; s_fat[2] = 0xFF;  // clusters 0, 1
+    s_fat[3] = 0xFF; s_fat[4] = 0x0F;                   // cluster 2 = 0xFFF (EOC)
+    // Root directory: one read-only STATUS.TXT at cluster 2.
     memset(s_root, 0, sizeof(s_root));
+    put_dir_entry(s_root, "STATUS  TXT", 0x01, STATUS_CLUSTER, STATUS_SIZE);
     s_inited = true;
+}
+
+static void build_status_sector(uint8_t out[SECTOR_SIZE]) {
+    char tmp[SECTOR_SIZE + 1];
+    int n = payload_store_format_status(tmp, sizeof(tmp));
+    if (n < 0) {
+        n = 0;
+    }
+    if (n > (int)SECTOR_SIZE) {
+        n = (int)SECTOR_SIZE;
+    }
+    memset(out, ' ', SECTOR_SIZE);
+    memcpy(out, tmp, (size_t)n);
 }
 
 // Parse the root directory and hand the largest regular file to the store.
@@ -94,6 +129,9 @@ static void scan_root_dir(void) {
         }
         if (c0 == 0xE5 || c0 == 0x2E) {
             continue;       // deleted, or "." / ".." / dot-files (macOS metadata)
+        }
+        if (memcmp(e, "STATUS  TXT", 11) == 0) {
+            continue;       // our own diagnostic file
         }
         uint8_t attr = e[11];
         if (attr == 0x0F) {
@@ -163,7 +201,12 @@ int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset, void *buff
         memcpy(buffer, s_fat + offset, bufsize);  // both FAT copies are identical
     } else if (lba >= ROOT_LBA && lba < ROOT_LBA + ROOT_SECS) {
         memcpy(buffer, s_root + offset, bufsize);
-    } else if (lba >= DATA_LBA && lba < TOTAL_SECS) {
+    } else if (lba == DATA_LBA) {
+        build_status_sector(tmp);           // cluster 2, sector 0: STATUS.TXT
+        memcpy(buffer, tmp + offset, bufsize);
+    } else if (lba > DATA_LBA && lba < DATA_LBA + SEC_PER_CLUS) {
+        memset(buffer, 0, bufsize);         // rest of the reserved STATUS cluster
+    } else if (lba >= DATA_LBA + SEC_PER_CLUS && lba < TOTAL_SECS) {
         uint32_t data_off = (lba - DATA_LBA) * SECTOR_SIZE + offset;
         payload_store_read(data_off, (uint8_t *)buffer, bufsize);
     } else {
@@ -191,7 +234,9 @@ int32_t tud_msc_write10_cb(uint8_t lun, uint32_t lba, uint32_t offset, uint8_t *
             memcpy(s_root + offset, buffer, bufsize);
             scan_root_dir();
         }
-    } else if (lba >= DATA_LBA && lba < TOTAL_SECS) {
+    } else if (lba >= DATA_LBA && lba < DATA_LBA + SEC_PER_CLUS) {
+        // Reserved STATUS cluster: ignore writes.
+    } else if (lba >= DATA_LBA + SEC_PER_CLUS && lba < TOTAL_SECS) {
         uint32_t data_off = (lba - DATA_LBA) * SECTOR_SIZE + offset;
         payload_store_write(data_off, buffer, bufsize);
     }
@@ -203,8 +248,8 @@ int32_t tud_msc_scsi_cb(uint8_t lun, uint8_t const scsi_cmd[16], void *buffer,
     (void)buffer;
     (void)bufsize;
     switch (scsi_cmd[0]) {
-        case 0x35:  // SCSI SYNCHRONIZE CACHE (10): host flushed; persist now.
-            payload_store_flush();
+        case 0x35:  // SCSI SYNCHRONIZE CACHE (10): host flushed; commit now.
+            payload_store_force_commit();
             return 0;
         default:
             tud_msc_set_sense(lun, SCSI_SENSE_ILLEGAL_REQUEST, 0x20, 0x00);
