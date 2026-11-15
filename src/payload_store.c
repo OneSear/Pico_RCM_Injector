@@ -32,7 +32,7 @@
 #define PAYLOAD_VERSION 1u
 
 // Bump on each firmware build so STATUS.TXT confirms which image is running.
-#define PAYLOAD_BUILD_ID "2026-11-15a"
+#define PAYLOAD_BUILD_ID "2026-11-15b"
 
 #define COMMIT_IDLE_MS  750u   // commit once writes have been quiet this long
 #define FLASH_OP_TIMEOUT_MS 3000u
@@ -69,6 +69,7 @@ static uint32_t s_pending_off = 0;
 static uint32_t s_pending_len = 0;
 
 static volatile uint32_t s_last_activity_ms = 0;
+static volatile bool     s_commit_requested = false;
 
 // Memory-mapped (XIP) views of the stored header / data.
 static inline const payload_hdr_t *hdr_xip(void) {
@@ -285,9 +286,18 @@ static void commit_now(void) {
     }
 }
 
-void payload_store_force_commit(void) { commit_now(); }
+// Called from USB callbacks (e.g. SYNCHRONIZE CACHE / eject): only set a flag.
+// The actual flash write happens in payload_store_task(), on the main loop,
+// never inside a USB callback -- doing flash there freezes USB long enough that
+// the host can time out the command and drop the drive.
+void payload_store_force_commit(void) { s_commit_requested = true; }
 
 void payload_store_task(void) {
+    if (s_commit_requested) {
+        s_commit_requested = false;
+        commit_now();
+        return;
+    }
     if (!s_have_pending && !s_page_dirty) {
         return;
     }
