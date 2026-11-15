@@ -15,8 +15,8 @@ This repository includes code and payload data derived from third-party open sou
 
 The generated header is included for convenience so this project builds into a ready-to-flash injector. If you want to use a different payload, regenerate it with:
 
-```powershell
-python tools/bin2payload_h.py C:\path\to\payload.bin include\payload.h
+```bash
+python tools/bin2payload_h.py path/to/payload.bin include/payload.h
 ```
 
 ## SAM Fusee Launcher Internal
