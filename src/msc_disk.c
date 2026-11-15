@@ -47,6 +47,11 @@ static uint8_t s_fat[SECTOR_SIZE];
 static uint8_t s_root[SECTOR_SIZE];
 static bool    s_inited = false;
 
+// Set when the host ejects the volume. While set, the unit reports "medium not
+// present" so the host leaves it ejected instead of auto-remounting. Cleared on
+// a load command or at power-up (replug).
+static bool    s_ejected = false;
+
 static void write_u16(uint8_t *p, uint16_t v) {
     p[0] = (uint8_t)(v & 0xFF);
     p[1] = (uint8_t)(v >> 8);
@@ -169,8 +174,12 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
 }
 
 bool tud_msc_test_unit_ready_cb(uint8_t lun) {
-    (void)lun;
     disk_init();
+    if (s_ejected) {
+        // SCSI_SENSE_NOT_READY + ASC 0x3A (MEDIUM NOT PRESENT).
+        tud_msc_set_sense(lun, SCSI_SENSE_NOT_READY, 0x3A, 0x00);
+        return false;
+    }
     return true;
 }
 
@@ -261,9 +270,13 @@ bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start,
                            bool load_eject) {
     (void)lun;
     (void)power_condition;
-    if (load_eject && !start) {
-        // Volume ejected/unmounted: make sure the payload is committed.
-        payload_store_force_commit();
+    if (load_eject) {
+        if (start) {
+            s_ejected = false;              // medium load: present again
+        } else {
+            payload_store_force_commit();   // commit before "removal"
+            s_ejected = true;               // medium eject: stay ejected
+        }
     }
     return true;
 }

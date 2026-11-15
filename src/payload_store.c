@@ -32,7 +32,7 @@
 #define PAYLOAD_VERSION 1u
 
 // Bump on each firmware build so STATUS.TXT confirms which image is running.
-#define PAYLOAD_BUILD_ID "2026-11-15b"
+#define PAYLOAD_BUILD_ID "2026-11-15c"
 
 #define COMMIT_IDLE_MS  750u   // commit once writes have been quiet this long
 #define FLASH_OP_TIMEOUT_MS 3000u
