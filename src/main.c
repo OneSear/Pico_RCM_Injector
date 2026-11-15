@@ -200,6 +200,20 @@ int main(void) {
                (unsigned long)rcm_payload_len);
     }
 
+    // Visible boot indicator: 3 green blinks if a stored (dropped) payload is
+    // active, 3 blue blinks if using the compiled-in default. Lets you confirm
+    // a dropped payload took effect even without a UART console.
+    for (int i = 0; i < 3; i++) {
+        if (payload_store_valid()) {
+            status_led_set(0, 60, 0);  // green: stored payload
+        } else {
+            status_led_set(0, 0, 60);  // blue: compiled-in fallback
+        }
+        sleep_ms(120);
+        status_led_set(0, 0, 0);
+        sleep_ms(120);
+    }
+
     multicore_reset_core1();
     multicore_launch_core1(core1_main);
 
