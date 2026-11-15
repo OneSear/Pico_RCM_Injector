@@ -1,5 +1,5 @@
 param(
-    [string]$Board = "pico",
+    [string]$Board = "pico2",
     [string]$Generator = "Ninja",
     [string]$SdkPath = $env:PICO_SDK_PATH
 )

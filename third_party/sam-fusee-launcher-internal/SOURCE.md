@@ -6,4 +6,4 @@ This directory contains the license text for the microcontroller Fusee launcher 
 - Source repository: https://github.com/blockfeed/sam-fusee-launcher-internal
 - Reference file: `main/main.ino`
 
-The RP2040 implementation in this repository ports the public launch sequence, intermezzo bytes, buffering behavior, and APX trigger flow into Pico SDK/TinyUSB host firmware.
+The RP2350 implementation in this repository ports the public launch sequence, intermezzo bytes, buffering behavior, and APX trigger flow into Pico SDK/TinyUSB host firmware.

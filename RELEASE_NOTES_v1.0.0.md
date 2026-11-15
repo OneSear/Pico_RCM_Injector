@@ -1,6 +1,6 @@
 # Pico RCM Injector v1.0.0
 
-Initial working UF2 release for Raspberry Pi Pico / RP2040 based RCM payload injection.
+Initial working UF2 release for the Waveshare RP2350-USB-CM (RP2350) RCM payload injector.
 
 ## Lawful Use Notice
 
@@ -14,10 +14,11 @@ If you are unsure whether your intended use is lawful, do not use this release u
 
 ## Asset
 
-Upload `build/pico_rcm_injector.uf2` as the release asset.
+The `pico_rcm_injector-<tag>.uf2` asset is built and attached automatically by the
+release workflow (`.github/workflows/release.yml`).
 
-Known-good SHA256:
+Compute its SHA-256 to record or verify a download:
 
 ```text
-76B2A0BA748EC3FB2EC20389149CBDBC34E8C3B478F8A0C57F7A652B82AF4A47
+sha256sum pico_rcm_injector-<tag>.uf2
 ```

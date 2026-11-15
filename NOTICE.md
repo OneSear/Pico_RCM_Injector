@@ -21,7 +21,7 @@ python tools/bin2payload_h.py C:\path\to\payload.bin include\payload.h
 
 ## SAM Fusee Launcher Internal
 
-The RP2040 injector sequence was ported from public microcontroller Fusee launcher prior art, especially `blockfeed/sam-fusee-launcher-internal`.
+The RP2350 injector sequence was ported from public microcontroller Fusee launcher prior art, especially `blockfeed/sam-fusee-launcher-internal`.
 
 - Upstream project: `blockfeed/sam-fusee-launcher-internal`
 - Source repository: https://github.com/blockfeed/sam-fusee-launcher-internal
@@ -30,4 +30,4 @@ The RP2040 injector sequence was ported from public microcontroller Fusee launch
 
 ## This Project
 
-The Pico/RP2040 firmware and tooling in this repository are licensed under the top-level `LICENSE`, except where third-party notices state otherwise.
+The Pico/RP2350 firmware and tooling in this repository are licensed under the top-level `LICENSE`, except where third-party notices state otherwise.
