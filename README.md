@@ -78,4 +78,4 @@ See `include/payload.example.h` for the header format.
 
 ## Credits and license
 
-Licensed under GPL-3.0-only. The launch sequence is ported from public microcontroller versions of the Fusée launcher flow, especially [blockfeed/sam-fusee-launcher-internal](https://github.com/blockfeed/sam-fusee-launcher-internal). The bundled payload is [CTCaer/hekate](https://github.com/CTCaer/hekate). See `NOTICE.md` and `third_party/` for sources, credits, and licenses.
+Forked from [Blintox/Pico_RCM_Injector](https://github.com/Blintox/Pico_RCM_Injector). Licensed under GPL-3.0-only. The launch sequence is ported from public microcontroller versions of the Fusée launcher flow, especially [blockfeed/sam-fusee-launcher-internal](https://github.com/blockfeed/sam-fusee-launcher-internal). The bundled payload is [CTCaer/hekate](https://github.com/CTCaer/hekate). See `NOTICE.md` and `third_party/` for sources, credits, and licenses.
