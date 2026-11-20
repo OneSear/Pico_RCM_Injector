@@ -76,16 +76,6 @@ python tools/bin2payload_h.py path/to/payload.bin include/payload.h
 
 See `include/payload.example.h` for the header format.
 
-## Hardware
-
-- Use a known-good USB-C data cable from the host port to the Switch.
-- The board powers the Switch side, so give it a stable 5 V through the flashing port.
-- Never connect two powered USB hosts together.
-
-## Lawful use only
-
-Use this only for lawful homebrew, recovery, repair, research, and interoperability, and only on hardware you own or are allowed to service. Don't use it to pirate games, bypass payment or online-service rules, or share console keys or copyrighted firmware. Follow the laws, licenses, and platform rules where you live. Not sure your use is legal? Check first. Use at your own risk — I'm not responsible for any damage to your board or your Switch.
-
 ## Credits and license
 
 Licensed under GPL-3.0-only. The launch sequence is ported from public microcontroller versions of the Fusée launcher flow, especially [blockfeed/sam-fusee-launcher-internal](https://github.com/blockfeed/sam-fusee-launcher-internal). The bundled payload is [CTCaer/hekate](https://github.com/CTCaer/hekate). See `NOTICE.md` and `third_party/` for sources, credits, and licenses.
